@@ -15,6 +15,7 @@ async def get_dashboard():
 @app.websocket("/ws/v1/stream")
 async def pipeline_stream(websocket: WebSocket):
     await websocket.accept()
+    frame_count = 0
     try:
         while True:
             image_bytes = await websocket.receive_bytes()
@@ -24,13 +25,26 @@ async def pipeline_stream(websocket: WebSocket):
             if enhanced_frame is None:
                 continue
 
-            detections, lat_detection = detector.run_inference(enhanced_frame)
-            tracked_targets, lat_tracking = tracker.update(detections)
+            frame_count += 1
+            inference_skipped = (frame_count % 3 != 0)
+
+            if inference_skipped:
+                detections = []
+                lat_detection = 0.0
+            else:
+                detection_result = detector.run_inference(enhanced_frame)
+                detections = detection_result.get("detections", [])
+                lat_detection = detection_result.get("inference_time_ms", 0.0)
+
+            t_track_start = time.perf_counter()
+            tracked_targets = tracker.update(detections)
+            lat_tracking = round((time.perf_counter() - t_track_start) * 1000, 2)
 
             total_latency = round((time.perf_counter() - t_start) * 1000, 2)
 
             telemetry_payload = {
                 "status": "success",
+                "inference_skipped": inference_skipped,
                 "targets": tracked_targets,
                 "latencies_ms": {
                     "preprocessing": lat_preproc,
@@ -42,3 +56,4 @@ async def pipeline_stream(websocket: WebSocket):
             await websocket.send_json(telemetry_payload)
     except WebSocketDisconnect:
         pass
+

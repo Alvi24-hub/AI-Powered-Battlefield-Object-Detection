@@ -388,7 +388,8 @@ class SpatialTargetTracker:
                             if expanded_iou > 0.0:
                                 iou_val = 0.35 + (expanded_iou * 0.1)
 
-                        class_penalty = 0.0 if det_class == track.class_id else 0.5
+                        # Class penalty: if detection class doesn't match track class, increase cost by 0.8
+                        class_penalty = 0.0 if det_class == track.class_id else 0.8
                         cost_matrix[d_idx, t_idx] = 1.0 - iou_val + class_penalty
 
                 row_ind, col_ind = linear_sum_assignment(cost_matrix)
