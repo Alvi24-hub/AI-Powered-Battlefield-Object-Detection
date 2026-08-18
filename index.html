@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Battlefield Vision - Tactical HUD</title>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { margin-bottom: 5px; color: #38bdf8; text-transform: uppercase; letter-spacing: 2px; }
+        .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
+        #canvas-container {
+            position: relative;
+            border: 2px solid #334155;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        .stats-panel {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+            width: 640px;
+        }
+        .stat-card {
+            background: #1e293b;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 4px solid #38bdf8;
+            text-align: center;
+        }
+        .stat-label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; }
+        .stat-value { font-size: 1.2rem; font-weight: bold; margin-top: 4px; }
+    </style>
+</head>
+<body>
+
+    <h1>Battlefield Vision HUD</h1>
+    <div class="subtitle">Live Pipeline Stream: Stage 1 (CLAHE) &rarr; Stage 2 (YOLO) &rarr; Stage 3 (Tracker)</div>
+
+    <div id="canvas-container">
+        <canvas id="hudCanvas" width="640" height="480"></canvas>
+    </div>
+
+    <!-- Hidden offscreen canvas to generate test JPEG frame bytes -->
+    <canvas id="offscreen" width="640" height="480" style="display:none;"></canvas>
+
+    <div class="stats-panel">
+        <div class="stat-card">
+            <div class="stat-label">Stage 1 Preproc</div>
+            <div class="stat-value" id="lat-s1">0 ms</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Stage 2 Detect</div>
+            <div class="stat-value" id="lat-s2">0 ms</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Stage 3 Track</div>
+            <div class="stat-value" id="lat-s3">0 ms</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label" style="color: #4ade80;">Total Latency</div>
+            <div class="stat-value" style="color: #4ade80;" id="lat-total">0 ms</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("hudCanvas");
+        const ctx = canvas.getContext("2d");
+        
+        const offscreen = document.getElementById("offscreen");
+        const offCtx = offscreen.getContext("2d");
+
+        const ws = new WebSocket("ws://localhost:8000/ws/v1/stream");
+
+        ws.onopen = () => {
+            console.log("Connected to Pipeline Hub");
+            sendNextFrame();
+        };
+
+        function sendNextFrame() {
+            // Draw a quick mock thermal frame on offscreen canvas
+            offCtx.fillStyle = "#1e293b";
+            offCtx.fillRect(0, 0, 640, 480);
+            
+            // Generate JPEG Blob and send as binary ArrayBuffer to WebSocket
+            offscreen.toBlob((blob) => {
+                if (blob && ws.readyState === WebSocket.OPEN) {
+                    blob.arrayBuffer().then(buffer => ws.send(buffer));
+                }
+            }, 'image/jpeg', 0.8);
+        }
+
+        ws.onmessage = (event) => {
+            const telemetry = JSON.parse(event.data);
+            
+            // Update Latency Readings
+            document.getElementById("lat-s1").innerText = telemetry.latencies_ms.preprocessing + " ms";
+            document.getElementById("lat-s2").innerText = telemetry.latencies_ms.detection + " ms";
+            document.getElementById("lat-s3").innerText = telemetry.latencies_ms.tracking + " ms";
+            document.getElementById("lat-total").innerText = telemetry.latencies_ms.total_pipeline + " ms";
+
+            // Clear Main Canvas
+            ctx.fillStyle = "#0f172a";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Tactical Grid Lines
+            ctx.strokeStyle = "#1e293b";
+            ctx.lineWidth = 1;
+            for(let x = 0; x < canvas.width; x += 40) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for(let y = 0; y < canvas.height; y += 40) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            // Render Tracked Targets
+            const targets = telemetry.targets || [];
+            targets.forEach(tgt => {
+                const [x1, y1, x2, y2] = tgt.bbox;
+                const [cx, cy] = tgt.weak_point;
+
+                // Draw Target Box
+                ctx.strokeStyle = "#f43f5e";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+                // Draw Label Tag
+                ctx.fillStyle = "#f43f5e";
+                ctx.fillRect(x1, y1 - 22, 160, 22);
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "12px monospace";
+                ctx.fillText(`[${tgt.target_id}] ${tgt.class.toUpperCase()}`, x1 + 5, y1 - 6);
+
+                // Draw Weak Point Crosshair
+                ctx.strokeStyle = "#38bdf8";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
+                ctx.stroke();
+            });
+
+            // Trigger Next Frame Loop
+            setTimeout(sendNextFrame, 40);
+        };
+    </script>
+</body>
+</html>
