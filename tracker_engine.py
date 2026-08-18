@@ -45,7 +45,7 @@ CLASS_METADATA = {
 }
 
 DEFAULT_METERS_PER_PIXEL = 0.05  # Spatial resolution scale parameter (configurable)
-MAX_LOST_FRAMES = 10             # Electronic Warfare Resilience frame threshold
+MAX_LOST_FRAMES = 15           # Electronic Warfare Resilience frame threshold
 
 
 # ------------------------- HELPER MATH FUNCTIONS -------------------------
