@@ -208,3 +208,46 @@ if __name__ == "__main__":
         port=8001,
         log_level="info"
     )
+
+# Add this method to your ThermalImageProcessor class
+def test_parameters(self, image_bytes: bytes, clip_values: list, tile_sizes: list):
+    """
+    Test multiple CLAHE parameter combinations and return comparison results.
+    Use this to find the optimal settings for your thermal/IR images.
+    """
+    results = {}
+    original_frame = None
+    
+    # Decode the image
+    np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    
+    if frame is None:
+        return {"error": "Invalid image payload"}
+    
+    original_frame = frame.copy()
+    
+    for clip in clip_values:
+        for tile in tile_sizes:
+            # Create a new CLAHE instance for each combination
+            clahe = cv2.createCLAHE(
+                clipLimit=clip,
+                tileGridSize=(tile, tile)
+            )
+            
+            # Process
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            enhanced = clahe.apply(gray)
+            processed = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+            
+            # Generate a key
+            key = f"clip_{clip}_tile_{tile}x{tile}"
+            
+            # Store result (you can save images to disk for comparison)
+            results[key] = {
+                "clip_limit": clip,
+                "tile_grid": (tile, tile),
+                "processed_frame": processed  # or save to file
+            }
+    
+    return results
