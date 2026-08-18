@@ -217,12 +217,7 @@ class AegisTrack:
     """
     Represents an active target track using a Kalman Filter to model target kinematic state.
     State representation: x = [u, v, s, r, u_dot, v_dot, s_dot]^T
-    Where:
-      - (u, v): Center coordinates of bounding box
-      - s: Scale (area) of bounding box
-      - r: Aspect ratio
-      - u_dot, v_dot: Center velocities (pixels-per-second)
-      - s_dot: Scale change rate
+    State Machine: TENTATIVE -> CONFIRMED (after 3 hits) -> GHOST (when occluded/skipped) -> EXPIRED
     """
     track_count = 0
 
@@ -233,10 +228,12 @@ class AegisTrack:
         self.conf = conf
         self.created_at = start_time
         self.last_seen = start_time
-        self.time_since_update = 0  # Frame counter since last detection-match
-        self.hits = 1               # Number of updates
-        self.age = 1                # Track lifetime in frames
-        self.status = "LOCKED"
+        self.time_since_update = 0
+        self.hits = 1
+        self.age = 1
+        
+        # State Machine: New tracks start as TENTATIVE
+        self.status = "TENTATIVE"
         self.is_decoy = False
         self.consistency_score = 100.0
         self.meters_per_pixel = meters_per_pixel
@@ -244,64 +241,44 @@ class AegisTrack:
 
         # Initialize Kalman Filter
         self.kf = KalmanFilter(dim_x=7, dim_z=4)
-        
-        # Initial State: Position from detection, velocities to 0
         z = bbox_to_z(bbox)
         self.kf.x[:4] = z
         self.kf.x[4:] = 0.0
 
-        # State Transition Matrix (constant-velocity kinematic model).
-        # F's velocity terms (dt elements) will be updated dynamically during each predict phase.
         self.kf.F = np.eye(7)
-
-        # Measurement Mapping Matrix (we only directly measure position, scale, and aspect ratio)
         self.kf.H = np.zeros((4, 7))
         self.kf.H[:4, :4] = np.eye(4)
 
-        # Measurement Covariance Matrix R
-        # Aspect ratio and scale measurements are assumed slightly noisier than center coordinates
-        self.kf.R = np.diag([1.0, 1.0, 10.0, 10.0])
-
-        # State Covariance Matrix P (represents initial uncertainty)
-        # Highly uncertain about initial velocities (1000.0), moderately uncertain about positions (10.0)
+        # Kalman Tuning:
+        # R: Lower measurement noise for center coordinates (u, v) to trust YOLO detections more.
+        self.kf.R = np.diag([0.5, 0.5, 10.0, 10.0])
+        # P: Initial uncertainty
         self.kf.P = np.diag([10.0, 10.0, 10.0, 10.0, 1000.0, 1000.0, 1000.0])
-
-        # Process Noise Covariance Matrix Q (represents kinematic perturbations)
-        self.kf.Q = np.diag([1.0, 1.0, 1.0, 1.0, 0.01, 0.01, 0.0001])
+        # Q: Higher process noise for velocity terms to follow high-speed / erratic battlefield targets.
+        self.kf.Q = np.diag([1.0, 1.0, 1.0, 1.0, 0.05, 0.05, 0.0005])
 
     def predict(self, timestamp: float) -> List[float]:
-        """
-        Predicts the next target state using the Kalman transition matrix.
-        Adapts dynamically to variable frame rates by calculating exact dt.
-        """
         dt = timestamp - self.last_seen if self.last_seen is not None else (1.0 / 30.0)
         if dt <= 0:
             dt = 1.0 / 30.0
 
-        # Inject dt into the constant-velocity motion equations in transition matrix
         self.kf.F[0, 4] = dt
         self.kf.F[1, 5] = dt
         self.kf.F[2, 6] = dt
 
-        # Propagate state forward in time
         self.kf.predict()
         self.age += 1
 
         if self.time_since_update > 0:
             self.hits = 0
-            self.status = "GHOST"  # Lost detection - predicting purely on kinematics
+            # Transition to GHOST during occlusion or skipped frames
+            self.status = "GHOST"
 
         self.time_since_update += 1
-        
-        # Return predicted box
         pred_bbox = z_to_bbox(self.kf.x[:4])
         return [float(v) for v in pred_bbox]
 
     def update(self, bbox: List[float], class_id: int, conf: float, timestamp: float):
-        """
-        Corrects and updates the Kalman state using a new sensor detection measurement.
-        Updates velocities, flags decoy behavior, and transitions track back to LOCKED.
-        """
         dt = timestamp - self.last_seen if self.last_seen is not None else (1.0 / 30.0)
         if dt <= 0:
             dt = 1.0 / 30.0
@@ -311,17 +288,19 @@ class AegisTrack:
         self.last_seen = timestamp
         self.class_id = class_id
         self.conf = conf
-        self.status = "LOCKED"
+        
+        # State Machine Logic: Promote from TENTATIVE to CONFIRMED after 3 hits
+        if self.hits >= 3:
+            self.status = "CONFIRMED"
+        else:
+            self.status = "TENTATIVE"
 
-        # Update Kalman Filter state with new measurement
         z = bbox_to_z(bbox)
         self.kf.update(z)
 
-        # Retrieve velocity estimates (rates of change of center-u and center-v per second)
         dx = self.kf.x[4, 0]
         dy = self.kf.x[5, 0]
 
-        # Evaluate movement consistency (Anti-Decoy Logic)
         self._verify_movement_consistency(dx, dy)
 
         self.history.append(bbox)
@@ -329,29 +308,19 @@ class AegisTrack:
             self.history.pop(0)
 
     def _verify_movement_consistency(self, dx: float, dy: float):
-        """
-        Anti-Decoy Logic:
-        Calculates a 'Movement Consistency Score' by checking the physical velocity
-        of the target in km/h against its classification limit.
-        """
         pixel_speed = np.sqrt(dx**2 + dy**2)
         speed_mps = pixel_speed * self.meters_per_pixel
         speed_kmh = speed_mps * 3.6
 
         meta = CLASS_METADATA.get(self.class_id, {"name": "Unknown", "max_speed_kmh": 120.0})
-        # Division by zero guard: ensure max_speed is at least 1.0 km/h
         max_speed = max(1.0, float(meta.get("max_speed_kmh", 120.0)))
 
         if speed_kmh <= max_speed:
             self.consistency_score = 100.0
             self.is_decoy = False
         else:
-            # Drop the consistency score proportionally to the overspeed ratio
             overspeed_ratio = (speed_kmh - max_speed) / max_speed
             self.consistency_score = max(0.0, 100.0 - (overspeed_ratio * 100.0))
-
-            # Flag as potential decoy if speed significantly exceeds threshold (>25% overspeed)
-            # We wait until the track is mature (hits > 2) to prevent initial Kalman settlement spikes
             if self.consistency_score < 75.0 and self.age > 3:
                 self.is_decoy = True
             else:
