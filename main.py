@@ -127,7 +127,7 @@ class ThermalImageProcessor:
 
 # ------------------------- GLOBAL INSTANCE -------------------------
 processor = ThermalImageProcessor(
-    clip_limit=4.0,
+    clip_limit=3.0,
     tile_grid_size=(8, 8)
 )
 
@@ -208,109 +208,3 @@ if __name__ == "__main__":
         port=8001,
         log_level="info"
     )
-
-# Add this method to your ThermalImageProcessor class
-def test_parameters(self, image_bytes: bytes, clip_values: list, tile_sizes: list):
-    """
-    Test multiple CLAHE parameter combinations and return comparison results.
-    Use this to find the optimal settings for your thermal/IR images.
-    """
-    results = {}
-    original_frame = None
-    
-    # Decode the image
-    np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    
-    if frame is None:
-        return {"error": "Invalid image payload"}
-    
-    original_frame = frame.copy()
-    
-    for clip in clip_values:
-        for tile in tile_sizes:
-            # Create a new CLAHE instance for each combination
-            clahe = cv2.createCLAHE(
-                clipLimit=clip,
-                tileGridSize=(tile, tile)
-            )
-            
-            # Process
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            enhanced = clahe.apply(gray)
-            processed = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-            
-            # Generate a key
-            key = f"clip_{clip}_tile_{tile}x{tile}"
-            
-            # Store result (you can save images to disk for comparison)
-            results[key] = {
-                "clip_limit": clip,
-                "tile_grid": (tile, tile),
-                "processed_frame": processed  # or save to file
-            }
-    
-    return results
-
-def process_frame(self, image_bytes: bytes) -> tuple:
-    """Process frame with input safeguards"""
-    
-    # SAFEGUARD 1: Check if input is None or empty
-    if image_bytes is None:
-        logger.error("Input is None")
-        return None, 0.0
-    
-    if len(image_bytes) == 0:
-        logger.error("Input is empty (0 bytes)")
-        return None, 0.0
-    
-    # SAFEGUARD 2: Check minimum size (valid JPEG is at least ~50 bytes)
-    if len(image_bytes) < 50:
-        logger.warning(f"Input too small: {len(image_bytes)} bytes")
-        return None, 0.0
-    
-    start_time = time.perf_counter()
-    
-    try:
-        # SAFEGUARD 3: Safely decode
-        np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
-        
-        if len(np_arr) == 0:
-            logger.error("Numpy array is empty")
-            return None, 0.0
-            
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        
-        # SAFEGUARD 4: Check if decode was successful
-        if frame is None:
-            logger.warning("Failed to decode image bytes")
-            return None, 0.0
-        
-        # SAFEGUARD 5: Check minimum dimensions
-        if frame.shape[0] < 16 or frame.shape[1] < 16:
-            logger.warning(f"Image too small: {frame.shape}")
-            return None, 0.0
-        
-        # SAFEGUARD 6: Check for all-black or all-white images (optional)
-        mean_val = np.mean(frame)
-        if mean_val < 5 or mean_val > 250:
-            logger.warning(f"Image may be corrupted: mean value {mean_val:.2f}")
-            # Still process but log it
-        
-        # Normal processing
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        enhanced_gray = self.clahe.apply(gray)
-        processed_frame = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2BGR)
-        
-        latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        
-        logger.debug(f"Frame OK | Shape: {processed_frame.shape} | Mean: {np.mean(processed_frame):.2f} | Latency: {latency_ms}ms")
-        
-        return processed_frame, latency_ms
-        
-    except cv2.error as e:
-        logger.error(f"OpenCV error: {e}")
-        return None, 0.0
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return None, 0.0

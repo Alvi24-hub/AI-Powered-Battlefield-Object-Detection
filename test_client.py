@@ -1,45 +1,80 @@
 import asyncio
 import cv2
-import numpy as np
-import websockets
 import json
+import websockets
 
-async def stream_mock_frames():
-    uri = "ws://localhost:8000/ws/v1/stream"
-    print(f"Connecting to Pipeline Hub at {uri}...")
+VIDEO_PATH = "battlefield_demo.mp4"
+
+async def stream_video(server_uri="ws://localhost:8000/ws/v1/stream"):
+    cap = cv2.VideoCapture(VIDEO_PATH)
+    
+    if not cap.isOpened():
+        print(f"\n❌ Error: Could not open '{VIDEO_PATH}'. Please verify the file name and path.\n")
+        return
+
+    print(f"\n🚀 Connecting to Pipeline Hub at {server_uri}...\n")
     
     try:
-        async with websockets.connect(uri) as websocket:
-            print(" Connected! Streaming test frames...\n")
-            
-            for i in range(1, 11):
-                mock_frame = np.random.randint(50, 200, (480, 640), dtype=np.uint8)
-                _, buffer = cv2.imencode('.jpg', mock_frame)
-                frame_bytes = buffer.tobytes()
-                
-                await websocket.send(frame_bytes)
-                
+        async with websockets.connect(server_uri) as websocket:
+            print("🟢 Connected! Streaming video frames...\n")
+            frame_count = 0
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    print("🔁 End of video reached. Looping stream...\n")
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+
+                # 📺 Show the actual video playing in a pop-up window!
+                cv2.imshow("Battlefield Live Video Feed", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+                # Encode frame to JPEG
+                success, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if not success:
+                    continue
+
+                # Send JPEG bytes over WebSocket
+                await websocket.send(buffer.tobytes())
+                frame_count += 1
+
+                # Receive telemetry output
                 response = await websocket.recv()
                 telemetry = json.loads(response)
-                
-                print(f" Frame {i:02d} | Status: {telemetry['status']} | Frame Shape: {telemetry['frame_shape']}")
-                print(f"   ⏱️  Stage 1 (Alvira CLAHE):    {telemetry['latencies_ms']['preprocessing']} ms")
-                print(f"   ⏱️  Stage 2 (Vishwadeep YOLO):  {telemetry['latencies_ms']['detection']} ms")
-                print(f"   ⏱️  Stage 3 (Pushpa Tracker):  {telemetry['latencies_ms']['tracking']} ms")
-                print(f"   ⏱️  Total Pipeline Latency:   {telemetry['latencies_ms']['total_pipeline']} ms")
-                
-                targets = telemetry.get("targets", [])
-                print(f"   🎯 Active Tracked Targets ({len(targets)}):")
+
+                lat = telemetry.get('latencies_ms', {})
+                status = telemetry.get('status', 'ok')
+                targets = telemetry.get('targets', [])
+
+                print(f" Frame {frame_count:03d} | Status: {status}")
+                print(f"   ├─ Stage 1 (CLAHE):       {lat.get('preprocessing', 0):.2f} ms")
+                print(f"   ├─ Stage 2 (YOLO):        {lat.get('detection', 0):.2f} ms")
+                print(f"   ├─ Stage 3 (Tracker):     {lat.get('tracking', 0):.2f} ms")
+                print(f"   └─ Total Pipeline:        {lat.get('total_pipeline', 0):.2f} ms")
+
+                print(f"   🎯 Active Targets Detected: {len(targets)}")
                 for tgt in targets:
-                    print(f"      • [{tgt['target_id']}] {tgt['class'].upper()} ({tgt['confidence']*100:.0f}%) -> Weak Point: {tgt['weak_point']} | Status: {tgt['status']}")
-                
-                print("-" * 65)
-                await asyncio.sleep(0.1)
+                    cls = tgt.get('class_name', tgt.get('class', 'target')).upper()
+                    conf = tgt.get('confidence', tgt.get('conf', 1.0)) * 100
+                    wp = tgt.get('weak_point', tgt.get('target_part', 'N/A'))
+                    t_status = tgt.get('status', 'ACTIVE')
+                    t_id = tgt.get('target_id', tgt.get('track_id', 'T-01'))
+                    print(f"       • [{t_id}] {cls} ({conf:.0f}%) -> Weak Point: {wp} | Status: {t_status}")
+
+                print("-" * 60)
+                await asyncio.sleep(0.033)
 
     except websockets.exceptions.ConnectionClosed:
-        print("\n Stream connection closed cleanly.")
+        print("\nStream connection closed cleanly.")
     except Exception as e:
-        print(f"\n Stream interrupted: {e}")
+        print(f"\n⚠️ Stream error: {e}")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        print("\n🔒 Video stream stopped.")
 
 if __name__ == "__main__":
-    asyncio.run(stream_mock_frames())
+    asyncio.run(stream_video())
+

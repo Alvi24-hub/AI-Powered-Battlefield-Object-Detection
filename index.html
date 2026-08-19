@@ -127,40 +127,26 @@
             const targets = telemetry.targets || [];
             targets.forEach(tgt => {
                 const [x1, y1, x2, y2] = tgt.bbox;
-                const isGhost = (tgt.status === "GHOST" || telemetry.inference_skipped);
-                const statusText = tgt.status || (isGhost ? "GHOST" : "CONFIRMED");
+                const [cx, cy] = tgt.weak_point;
 
-                // Target Box Styling: Dashed Amber/Orange line for GHOST, Solid Rose for Active
-                if (statusText === "GHOST") {
-                    ctx.strokeStyle = "#f59e0b"; // Amber / Warning
-                    ctx.setLineDash([6, 4]);
-                } else {
-                    ctx.strokeStyle = "#f43f5e"; // Rose / Confirmed
-                    ctx.setLineDash([]);
-                }
+                // Draw Target Box
+                ctx.strokeStyle = "#f43f5e";
                 ctx.lineWidth = 2;
                 ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-                ctx.setLineDash([]); // Reset line dash
 
-                // Label Tag Background & Text
-                const className = (tgt.class_name || tgt.class || "TARGET").toUpperCase();
-                const tagLabel = statusText === "GHOST" ? `[GHOST] ${tgt.target_id} | ${className}` : `[${tgt.target_id}] ${className}`;
-                
-                ctx.fillStyle = statusText === "GHOST" ? "#b45309" : "#f43f5e";
-                ctx.fillRect(x1, y1 - 22, 180, 22);
+                // Draw Label Tag
+                ctx.fillStyle = "#f43f5e";
+                ctx.fillRect(x1, y1 - 22, 160, 22);
                 ctx.fillStyle = "#ffffff";
-                ctx.font = "11px monospace";
-                ctx.fillText(tagLabel, x1 + 5, y1 - 6);
+                ctx.font = "12px monospace";
+                ctx.fillText(`[${tgt.target_id}] ${tgt.class.toUpperCase()}`, x1 + 5, y1 - 6);
 
-                // Weak Point Crosshair (if weak_point present)
-                if (tgt.weak_point) {
-                    const [cx, cy] = tgt.weak_point;
-                    ctx.strokeStyle = "#38bdf8";
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
-                    ctx.stroke();
-                }
+                // Draw Weak Point Crosshair
+                ctx.strokeStyle = "#38bdf8";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
+                ctx.stroke();
             });
 
             // Trigger Next Frame Loop
